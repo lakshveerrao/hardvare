@@ -19,6 +19,28 @@ function setPanelStatus(panel, message, tone) {
   panel.dataset.tone = tone || "";
 }
 
+async function readResponsePayload(response) {
+  const responseText = await response.text();
+
+  if (!responseText) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(responseText);
+  } catch {
+    if (response.ok) {
+      return {
+        message: responseText
+      };
+    }
+
+    return {
+      error: responseText
+    };
+  }
+}
+
 function escapeHtml(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
@@ -152,6 +174,7 @@ async function loadDashboard() {
   const response = await fetch("/api/admin/dashboard", {
     credentials: "same-origin"
   });
+  const result = await readResponsePayload(response);
 
   if (response.status === 401) {
     stopDashboardRefresh();
@@ -160,8 +183,6 @@ async function loadDashboard() {
     setPanelStatus(loginStatusPanel, "Please log in to open the dashboard.", "pending");
     return false;
   }
-
-  const result = await response.json();
 
   if (!response.ok) {
     throw new Error(result.error || "Unable to load the dashboard.");
@@ -194,7 +215,7 @@ async function refreshSession() {
   const response = await fetch("/api/admin/session", {
     credentials: "same-origin"
   });
-  const result = await response.json();
+  const result = await readResponsePayload(response);
 
   if (!result.authenticated) {
     toggleAuthenticatedState(false);
@@ -229,7 +250,7 @@ loginForm.addEventListener("submit", async (event) => {
       credentials: "same-origin",
       body: JSON.stringify(payload)
     });
-    const result = await response.json();
+    const result = await readResponsePayload(response);
 
     if (!response.ok) {
       throw new Error(result.error || "Unable to sign in.");
@@ -287,8 +308,7 @@ callForm.addEventListener("submit", async (event) => {
       credentials: "same-origin",
       body: JSON.stringify(payload)
     });
-
-    const result = await response.json();
+    const result = await readResponsePayload(response);
 
     if (response.status === 401) {
       toggleAuthenticatedState(false);
