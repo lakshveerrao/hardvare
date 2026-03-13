@@ -1,0 +1,359 @@
+:root {
+  --ink: #0b1725;
+  --muted: #4f6277;
+  --surface: rgba(255, 255, 255, 0.92);
+  --surface-strong: rgba(248, 251, 255, 0.98);
+  --line: rgba(16, 37, 61, 0.12);
+  --accent: #ff7a18;
+  --accent-deep: #d95a06;
+  --success: #166534;
+  --error: #9f1239;
+  --pending: #1d4ed8;
+  --shadow: 0 24px 60px rgba(15, 23, 42, 0.16);
+  --radius: 26px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Segoe UI Variable Display", "Bahnschrift", "Trebuchet MS", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at top left, rgba(255, 198, 109, 0.7), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(87, 162, 255, 0.34), transparent 32%),
+    linear-gradient(135deg, #fff4dc 0%, #f5fbff 52%, #eef6ff 100%);
+}
+
+.page-shell {
+  width: min(1180px, calc(100% - 2rem));
+  margin: 0 auto;
+  padding: 3rem 0 4rem;
+  display: grid;
+  gap: 1.5rem;
+  grid-template-columns: 1.05fr 0.95fr;
+}
+
+.hero-card,
+.auth-card,
+.dashboard-card,
+.dashboard-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
+}
+
+.hero-card,
+.auth-card,
+.dashboard-card {
+  padding: 2.2rem;
+}
+
+.dashboard-card {
+  grid-column: 1 / -1;
+}
+
+.dashboard-layout {
+  margin-top: 1.5rem;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(320px, 0.92fr) minmax(0, 1.08fr);
+}
+
+.dashboard-panel {
+  padding: 1.4rem;
+  box-shadow: none;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.eyebrow {
+  margin: 0 0 0.8rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--accent-deep);
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+}
+
+h1 {
+  max-width: 11ch;
+  font-size: clamp(2.4rem, 5vw, 4.3rem);
+  line-height: 0.95;
+}
+
+h2 {
+  font-size: clamp(1.6rem, 3vw, 2.3rem);
+  line-height: 1.05;
+}
+
+h3 {
+  font-size: 1.2rem;
+}
+
+.lede {
+  max-width: 60ch;
+  margin: 1.25rem 0 0;
+  font-size: 1.05rem;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.lede.compact {
+  max-width: none;
+}
+
+.topic-grid,
+.metric-grid,
+.service-grid {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.topic-grid {
+  margin-top: 2rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.metric-grid {
+  margin-top: 1.5rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.service-grid {
+  margin-top: 1rem;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.topic-grid div,
+.metric-card,
+.service-card {
+  padding: 1rem;
+  border-radius: 18px;
+  background: var(--surface-strong);
+  border: 1px solid rgba(18, 52, 86, 0.08);
+}
+
+.metric-card,
+.service-card {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.metric-card span,
+.service-card span {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.metric-card strong,
+.service-card strong {
+  font-size: 1.1rem;
+}
+
+.dashboard-topbar,
+.panel-header,
+.session-header,
+.session-links {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.panel-header {
+  margin-bottom: 1rem;
+}
+
+.panel-header p {
+  margin: 0;
+  max-width: 26ch;
+  color: var(--muted);
+  line-height: 1.5;
+  text-align: right;
+}
+
+form {
+  display: grid;
+  gap: 0.8rem;
+}
+
+label {
+  font-size: 0.94rem;
+  font-weight: 700;
+}
+
+input {
+  width: 100%;
+  padding: 0.95rem 1rem;
+  border: 1px solid rgba(14, 43, 73, 0.18);
+  border-radius: 14px;
+  font: inherit;
+  background: #fff;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+input:focus {
+  outline: none;
+  border-color: rgba(255, 122, 24, 0.72);
+  box-shadow: 0 0 0 4px rgba(255, 122, 24, 0.16);
+}
+
+button {
+  margin-top: 0.5rem;
+  padding: 1rem 1.2rem;
+  border: none;
+  border-radius: 999px;
+  font: inherit;
+  font-weight: 800;
+  color: #fff;
+  cursor: pointer;
+  background: linear-gradient(135deg, var(--accent) 0%, #ff9248 100%);
+  box-shadow: 0 18px 30px rgba(228, 90, 0, 0.22);
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.ghost-button {
+  margin-top: 0;
+  padding: 0.8rem 1rem;
+  background: rgba(12, 23, 37, 0.88);
+  box-shadow: none;
+}
+
+.help-text {
+  margin-top: 1rem;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.status-panel {
+  min-height: 4.5rem;
+  margin-top: 1.2rem;
+  padding: 1rem 1.1rem;
+  border-radius: 16px;
+  border: 1px dashed rgba(18, 52, 86, 0.18);
+  background: rgba(255, 255, 255, 0.7);
+  line-height: 1.6;
+}
+
+.status-panel[data-tone="pending"] {
+  color: var(--pending);
+}
+
+.status-panel[data-tone="success"] {
+  color: var(--success);
+}
+
+.status-panel[data-tone="error"] {
+  color: var(--error);
+}
+
+.session-list {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.session-card,
+.empty-state {
+  padding: 1rem;
+  border-radius: 18px;
+  border: 1px solid rgba(18, 52, 86, 0.1);
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.session-header strong {
+  font-size: 1rem;
+}
+
+.session-header span {
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.session-meta {
+  margin-top: 0.7rem;
+  display: grid;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.session-links {
+  margin-top: 0.9rem;
+}
+
+.session-links a {
+  color: var(--accent-deep);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.hidden {
+  display: none;
+}
+
+@media (max-width: 980px) {
+  .page-shell,
+  .dashboard-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .metric-grid,
+  .service-grid,
+  .topic-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-card {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .page-shell {
+    width: min(100% - 1rem, 100%);
+    padding-top: 1rem;
+  }
+
+  .hero-card,
+  .auth-card,
+  .dashboard-card,
+  .dashboard-panel {
+    padding: 1.2rem;
+  }
+
+  .metric-grid,
+  .service-grid,
+  .topic-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-topbar,
+  .panel-header,
+  .session-header,
+  .session-links {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .panel-header p {
+    text-align: left;
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "hardware-phone-bot",
+  "version": "1.0.0",
+  "description": "A Twilio-powered phone bot that calls users, verifies a PIN, and reads hardware topics over DTMF.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test"
+  },
+  "keywords": [
+    "twilio",
+    "voice",
+    "ivr",
+    "express"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "openai": "^6.27.0",
+    "playwright-core": "^1.58.2",
+    "twilio": "^5.13.0"
+  }
+}

@@ -1,0 +1,10 @@
+node_modules/
+.env
+data/callers.json
+generated/*.ino
+.ota-builds/
+.tmp-ota-test/
+.arduino-data/
+.codex/
+.tools/
+.upload-sketch/
