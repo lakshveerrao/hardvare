@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
+    "sync:retell": "node scripts/sync-retell.js",
     "test": "node --test"
   },
   "keywords": [

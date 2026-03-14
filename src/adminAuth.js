@@ -1,7 +1,8 @@
 const { createHmac, randomBytes, timingSafeEqual } = require("crypto");
 const { config } = require("./config");
+const { getAccountByUsername, verifyAccountPassword } = require("./store");
 
-const SESSION_COOKIE_NAME = "hardware_builder_admin";
+const SESSION_COOKIE_NAME = "hardware_builder_session";
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const sessions = new Map();
 
@@ -67,14 +68,16 @@ function buildSessionCookie(value, maxAgeSeconds) {
   return parts.join("; ");
 }
 
-function createAdminSession() {
+function createAuthSession(account) {
   cleanupExpiredSessions();
 
   const sessionId = randomBytes(24).toString("hex");
   const expiresAt = Date.now() + SESSION_TTL_MS;
 
   sessions.set(sessionId, {
-    username: config.adminUsername,
+    accountId: account.id,
+    username: account.username,
+    role: account.role || "user",
     expiresAt
   });
 
@@ -88,8 +91,8 @@ function createAdminSession() {
   };
 }
 
-function clearAdminSession(req) {
-  const session = getAdminSession(req);
+function clearAuthSession(req) {
+  const session = getAuthSession(req);
 
   if (session) {
     sessions.delete(session.sessionId);
@@ -98,7 +101,7 @@ function clearAdminSession(req) {
   return buildSessionCookie("", 0);
 }
 
-function getAdminSession(req) {
+function getAuthSession(req) {
   cleanupExpiredSessions();
 
   const cookies = parseCookieHeader(req.headers.cookie);
@@ -132,21 +135,32 @@ function getAdminSession(req) {
 
   return {
     sessionId,
+    accountId: session.accountId,
     username: session.username,
+    role: session.role || "user",
     expiresAt: session.expiresAt
   };
 }
 
-function isValidAdminCredentials(username, password) {
-  return (
-    secureEqual(String(username || ""), config.adminUsername) &&
-    secureEqual(String(password || ""), config.adminPassword)
-  );
+async function authenticateCredentials(username, password) {
+  const account = await getAccountByUsername(username);
+
+  if (!account || !verifyAccountPassword(password, account)) {
+    return null;
+  }
+
+  return {
+    id: account.id,
+    username: account.username,
+    role: account.role || "user",
+    createdAt: account.createdAt,
+    updatedAt: account.updatedAt
+  };
 }
 
 module.exports = {
-  clearAdminSession,
-  createAdminSession,
-  getAdminSession,
-  isValidAdminCredentials
+  authenticateCredentials,
+  clearAuthSession,
+  createAuthSession,
+  getAuthSession
 };

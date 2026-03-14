@@ -1,18 +1,27 @@
 const loginSection = document.getElementById("login-section");
 const dashboardSection = document.getElementById("dashboard-section");
+const signedInBanner = document.getElementById("signed-in-banner");
+const signedInCopy = document.getElementById("signed-in-copy");
 const loginForm = document.getElementById("login-form");
+const signupForm = document.getElementById("signup-form");
 const callForm = document.getElementById("call-form");
 const loginButton = document.getElementById("login-button");
+const signupButton = document.getElementById("signup-button");
 const logoutButton = document.getElementById("logout-button");
 const submitButton = document.getElementById("submit-button");
 const loginStatusPanel = document.getElementById("login-status");
+const signupStatusPanel = document.getElementById("signup-status");
 const callStatusPanel = document.getElementById("status");
 const authUsername = document.getElementById("auth-username");
+const authRole = document.getElementById("auth-role");
+const dashboardCopy = document.getElementById("dashboard-copy");
 const metricsContainer = document.getElementById("dashboard-metrics");
 const servicesContainer = document.getElementById("service-status");
 const sessionList = document.getElementById("session-list");
+const startBuildLinks = Array.from(document.querySelectorAll("[data-start-build-link]"));
 
 let dashboardRefreshHandle = null;
+let currentAccountRole = "user";
 
 function setPanelStatus(panel, message, tone) {
   panel.textContent = message;
@@ -67,6 +76,44 @@ function formatDate(value) {
 function toggleAuthenticatedState(isAuthenticated) {
   loginSection.classList.toggle("hidden", isAuthenticated);
   dashboardSection.classList.toggle("hidden", !isAuthenticated);
+  if (signedInBanner) {
+    signedInBanner.classList.toggle("hidden", !isAuthenticated);
+  }
+  updateStartBuildTargets(isAuthenticated);
+}
+
+function updateAccountBanner(username, role) {
+  currentAccountRole = role || "user";
+  authUsername.textContent = username || "User";
+  authRole.textContent = currentAccountRole;
+  authRole.dataset.role = currentAccountRole;
+  if (signedInCopy) {
+    signedInCopy.textContent =
+      currentAccountRole === "admin"
+        ? "You are signed in as admin. Review the platform state or jump straight into a live build call."
+        : `Signed in as ${username || "User"}. Continue with a build call or review your saved sessions.`;
+  }
+  dashboardCopy.textContent =
+    currentAccountRole === "admin"
+      ? "You are signed in as admin, so you can see every saved call session."
+      : "You are signed in with your own saved account, so the dashboard only shows your sessions.";
+}
+
+function updateStartBuildTargets(isAuthenticated) {
+  const nextTarget = isAuthenticated ? "#dashboard-section" : "#access-section";
+
+  startBuildLinks.forEach((link) => {
+    link.setAttribute("href", nextTarget);
+  });
+}
+
+function scrollToSection(section) {
+  if (section && typeof section.scrollIntoView === "function") {
+    section.scrollIntoView({
+      behavior: "smooth",
+      block: "start"
+    });
+  }
 }
 
 function renderMetrics(summary) {
@@ -102,8 +149,10 @@ function renderMetrics(summary) {
 function renderServices(services) {
   const cards = [
     {
-      title: "Twilio",
-      value: services.twilioConfigured ? services.twilioMode : "not configured"
+      title: "Call Provider",
+      value: services.callProviderConfigured
+        ? `${services.callProvider} (${services.providerStatus || "configured"})`
+        : "not configured"
     },
     {
       title: "OpenAI",
@@ -147,6 +196,23 @@ function renderSessions(sessions) {
         ? `<a href="${encodeURI(session.artifact.publicPath)}" target="_blank" rel="noreferrer">Download sketch</a>`
         : "No sketch yet";
       const otaState = session.otaStatus?.state || "idle";
+      const validationState = session.validationState || "pending";
+      const safetyLine = session.safetySummary
+        ? `<span>Safety: ${escapeHtml(session.safetySummary)}</span>`
+        : "";
+      const diagnosticsLine = session.diagnostics
+        ? `<span>Scan: Wi-Fi ${session.diagnostics.wifiConnected ? "connected" : "offline"}, I2C devices ${escapeHtml(session.diagnostics.i2cDeviceCount)}, reset ${escapeHtml(session.diagnostics.resetReason || "unknown")}</span>`
+        : "";
+      const recoveryLine = session.recovery?.portAddress
+        ? `<span>Recovery: USB ${escapeHtml(session.recovery.portAddress)}</span>`
+        : "";
+      const firmwareLine = session.firmwareFileName
+        ? `<span>Firmware: ${escapeHtml(session.firmwareFileName)}</span>`
+        : "";
+      const ownerLine =
+        currentAccountRole === "admin" && session.ownerUsername
+          ? `<span>Owner: ${escapeHtml(session.ownerUsername)}</span>`
+          : "";
 
       return `
         <article class="session-card">
@@ -155,10 +221,16 @@ function renderSessions(sessions) {
             <span>${escapeHtml(session.phoneNumber || "No phone number")}</span>
           </div>
           <div class="session-meta">
+            ${ownerLine}
             <span>Build: ${escapeHtml(session.projectTitle || session.buildRequest || "Waiting for request")}</span>
             <span>Status: ${escapeHtml(session.buildStatus || "idle")}</span>
+            <span>Validation: ${escapeHtml(validationState)}</span>
             <span>Step: ${escapeHtml(session.currentStepIndex)} / ${escapeHtml(session.stepCount)}</span>
             <span>OTA: ${escapeHtml(otaState)}</span>
+            ${firmwareLine}
+            ${safetyLine}
+            ${diagnosticsLine}
+            ${recoveryLine}
             <span>Updated: ${escapeHtml(formatDate(session.updatedAt))}</span>
           </div>
           <div class="session-links">
@@ -171,7 +243,7 @@ function renderSessions(sessions) {
 }
 
 async function loadDashboard() {
-  const response = await fetch("/api/admin/dashboard", {
+  const response = await fetch("/api/dashboard", {
     credentials: "same-origin"
   });
   const result = await readResponsePayload(response);
@@ -179,7 +251,7 @@ async function loadDashboard() {
   if (response.status === 401) {
     stopDashboardRefresh();
     toggleAuthenticatedState(false);
-    authUsername.textContent = "Admin";
+    updateAccountBanner("User", "user");
     setPanelStatus(loginStatusPanel, "Please log in to open the dashboard.", "pending");
     return false;
   }
@@ -188,7 +260,7 @@ async function loadDashboard() {
     throw new Error(result.error || "Unable to load the dashboard.");
   }
 
-  authUsername.textContent = result.admin.username;
+  updateAccountBanner(result.account.username, result.account.role);
   renderMetrics(result.summary);
   renderServices(result.services);
   renderSessions(result.recentSessions || []);
@@ -212,7 +284,7 @@ function stopDashboardRefresh() {
 }
 
 async function refreshSession() {
-  const response = await fetch("/api/admin/session", {
+  const response = await fetch("/api/auth/session", {
     credentials: "same-origin"
   });
   const result = await readResponsePayload(response);
@@ -220,11 +292,12 @@ async function refreshSession() {
   if (!result.authenticated) {
     toggleAuthenticatedState(false);
     stopDashboardRefresh();
+    updateAccountBanner("User", "user");
     return;
   }
 
   toggleAuthenticatedState(true);
-  authUsername.textContent = result.username;
+  updateAccountBanner(result.username, result.role);
   await loadDashboard();
   startDashboardRefresh();
 }
@@ -239,10 +312,10 @@ loginForm.addEventListener("submit", async (event) => {
   };
 
   loginButton.disabled = true;
-  setPanelStatus(loginStatusPanel, "Signing in to the dashboard...", "pending");
+  setPanelStatus(loginStatusPanel, "Signing in...", "pending");
 
   try {
-    const response = await fetch("/api/admin/login", {
+    const response = await fetch("/api/auth/login", {
       method: "POST",
       headers: {
         "Content-Type": "application/json"
@@ -257,10 +330,12 @@ loginForm.addEventListener("submit", async (event) => {
     }
 
     setPanelStatus(loginStatusPanel, result.message, "success");
+    setPanelStatus(signupStatusPanel, "", "");
     await refreshSession();
     loginForm.reset();
     document.getElementById("username").value = "esphardvare";
     setPanelStatus(callStatusPanel, "Dashboard ready. You can start a call now.", "success");
+    scrollToSection(dashboardSection);
   } catch (error) {
     setPanelStatus(loginStatusPanel, error.message, "error");
   } finally {
@@ -268,19 +343,66 @@ loginForm.addEventListener("submit", async (event) => {
   }
 });
 
+signupForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  const formData = new FormData(signupForm);
+  const payload = {
+    username: String(formData.get("username") || ""),
+    password: String(formData.get("password") || ""),
+    confirmPassword: String(formData.get("confirmPassword") || "")
+  };
+
+  if (payload.password !== payload.confirmPassword) {
+    setPanelStatus(signupStatusPanel, "Password confirmation does not match.", "error");
+    return;
+  }
+
+  signupButton.disabled = true;
+  setPanelStatus(signupStatusPanel, "Creating your saved account...", "pending");
+
+  try {
+    const response = await fetch("/api/auth/register", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      credentials: "same-origin",
+      body: JSON.stringify(payload)
+    });
+    const result = await readResponsePayload(response);
+
+    if (!response.ok) {
+      throw new Error(result.error || "Unable to create the account.");
+    }
+
+    setPanelStatus(signupStatusPanel, result.message, "success");
+    setPanelStatus(loginStatusPanel, "", "");
+    await refreshSession();
+    signupForm.reset();
+    setPanelStatus(callStatusPanel, "Your account is ready. You can start a call now.", "success");
+    scrollToSection(dashboardSection);
+  } catch (error) {
+    setPanelStatus(signupStatusPanel, error.message, "error");
+  } finally {
+    signupButton.disabled = false;
+  }
+});
+
 logoutButton.addEventListener("click", async () => {
   logoutButton.disabled = true;
 
   try {
-    await fetch("/api/admin/logout", {
+    await fetch("/api/auth/logout", {
       method: "POST",
       credentials: "same-origin"
     });
   } finally {
     stopDashboardRefresh();
     toggleAuthenticatedState(false);
-    authUsername.textContent = "Admin";
+    updateAccountBanner("User", "user");
     setPanelStatus(loginStatusPanel, "You have been logged out.", "pending");
+    setPanelStatus(signupStatusPanel, "", "");
     setPanelStatus(callStatusPanel, "", "");
     logoutButton.disabled = false;
   }
@@ -313,7 +435,7 @@ callForm.addEventListener("submit", async (event) => {
     if (response.status === 401) {
       toggleAuthenticatedState(false);
       stopDashboardRefresh();
-      throw new Error("Your admin session expired. Please log in again.");
+      throw new Error("Your session expired. Please log in again.");
     }
 
     if (!response.ok) {
@@ -327,7 +449,7 @@ callForm.addEventListener("submit", async (event) => {
 
     setPanelStatus(
       callStatusPanel,
-      `${result.message} ${modeLabel} Device ID: ${result.esp32Id}. Call SID: ${result.callSid}`,
+      `${result.message} ${modeLabel} Device ID: ${result.esp32Id}. Phone: ${result.phoneNumber}. Call SID: ${result.callSid}`,
       "success"
     );
 

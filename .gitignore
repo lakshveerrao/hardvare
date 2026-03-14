@@ -5,6 +5,14 @@ generated/*.ino
 .ota-builds/
 .tmp-ota-test/
 .arduino-data/
+.arduino-user/
 .codex/
 .tools/
 .upload-sketch/
+.cloudflared/
+.cloudflared-extract/
+cloudflared*.log
+.cloudflared-login.out
+localtunnel.log
+retell-sdk-*.tgz
+package/

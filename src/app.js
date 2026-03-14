@@ -1,36 +1,51 @@
 const path = require("path");
 const express = require("express");
-const twilio = require("twilio");
 const {
-  clearAdminSession,
-  createAdminSession,
-  getAdminSession,
-  isValidAdminCredentials
+  authenticateCredentials,
+  clearAuthSession,
+  createAuthSession,
+  getAuthSession
 } = require("./adminAuth");
-const { generateBuildPlan } = require("./buildService");
-const { BUILD_HINTS } = require("./content");
-const { config, isOpenAIConfigured, isTwilioConfigured } = require("./config");
-const { openOtaConsole } = require("./otaAutomation");
+const { createBuildDraft, validateBuildDraft } = require("./buildService");
 const {
+  getCallProviderInput,
+  isCallProviderConfigured,
+  isPlivoConfigured,
+  isRetellConfigured,
+  isTwilioConfigured,
+  placeOutboundCall
+} = require("./callProvider");
+const { BUILD_HINTS } = require("./content");
+const { config, isOpenAIConfigured } = require("./config");
+const { openOtaConsole } = require("./otaAutomation");
+const { getRetellToolSecret } = require("./retellSync");
+const {
+  createAccount,
+  createCallSession,
   getUser,
   getUserByDeviceId,
+  incrementDeviceBuildCount,
   listUsers,
   setLastCallSid,
   updateUser,
-  upsertUser,
+  updateDeviceFeedback,
   verifyPin
 } = require("./store");
 const {
   isValidEspDeviceId,
+  isValidPassword,
   isValidPhoneNumber,
   isValidPin,
+  isValidUsername,
   normalizeEspDeviceId,
+  normalizePassword,
   normalizePhoneNumber,
-  normalizePin
+  normalizePin,
+  normalizeUsername
 } = require("./validation");
-
-const VoiceResponse = twilio.twiml.VoiceResponse;
+const { createVoiceResponse } = require("./voiceResponse");
 const generationJobs = new Map();
+const validationJobs = new Map();
 const otaJobs = new Map();
 
 function absoluteUrl(relativePath) {
@@ -39,53 +54,43 @@ function absoluteUrl(relativePath) {
 
 function xmlResponse(res, voiceResponse) {
   res.type("text/xml");
-  res.send(voiceResponse.toString());
+  res.send(typeof voiceResponse === "string" ? voiceResponse : voiceResponse.toString());
 }
 
-function hasPublicWebhookBaseUrl() {
-  try {
-    const url = new URL(config.publicBaseUrl);
-    const localHosts = new Set(["localhost", "127.0.0.1", "::1"]);
-    return !localHosts.has(url.hostname);
-  } catch {
-    return false;
-  }
-}
-
-function isIndianPhoneNumber(phoneNumber) {
-  return String(phoneNumber || "").startsWith("+91");
-}
-
-function createTwilioClient() {
-  if (config.twilioApiKeySid && config.twilioApiKeySecret) {
-    return twilio(config.twilioApiKeySid, config.twilioApiKeySecret, {
-      accountSid: config.twilioAccountSid
-    });
-  }
-
-  return twilio(config.twilioAccountSid, config.twilioAuthToken);
-}
-
-function requireAdmin(req, res, next) {
-  const session = getAdminSession(req);
+function requireAuth(req, res, next) {
+  const session = getAuthSession(req);
 
   if (!session) {
     return res.status(401).json({
-      error: "Please sign in with the admin username and password."
+      error: "Please sign in with a saved username and password."
     });
   }
 
-  req.adminSession = session;
+  req.authSession = session;
   return next();
+}
+
+function canAccessSession(authSession, user) {
+  return (
+    authSession.role === "admin" ||
+    (user.ownerAccountId && user.ownerAccountId === authSession.accountId)
+  );
 }
 
 function shapeDashboardSession(user) {
   const artifact = user.buildPlan?.artifact || null;
+  const diagnostics = user.otaStatus?.preflight?.diagnostics || null;
+  const i2cScans = Array.isArray(diagnostics?.i2cScans) ? diagnostics.i2cScans : [];
+  const i2cDeviceCount = i2cScans.reduce(
+    (sum, scan) => sum + Number(scan?.deviceCount || 0),
+    0
+  );
 
   return {
     id: user.id,
     phoneNumber: user.phoneNumber,
     esp32Id: user.esp32Id || null,
+    ownerUsername: user.ownerUsername || null,
     updatedAt: user.updatedAt,
     createdAt: user.createdAt,
     lastCallSid: user.lastCallSid || null,
@@ -96,22 +101,47 @@ function shapeDashboardSession(user) {
     stepCount: user.buildPlan?.stepCount || 0,
     projectTitle: user.buildPlan?.projectTitle || null,
     generatedAt: user.buildPlan?.generatedAt || null,
+    validationState: user.buildPlan?.validation?.state || null,
+    validationAttempts: user.buildPlan?.validation?.attempts || 0,
+    validatedAt: user.buildPlan?.validation?.validatedAt || null,
     artifact:
       artifact && {
         fileName: artifact.fileName,
         publicPath: artifact.publicPath,
         absoluteUrl: absoluteUrl(artifact.publicPath)
       },
+    safetySummary: user.otaStatus?.preflight?.analysis?.spokenSummary || null,
+    safetyState: user.otaStatus?.preflight?.analysis?.diagnosticState || null,
+    recovery: user.otaStatus?.recovery || null,
+    uploadMode: user.otaStatus?.uploadMode || null,
+    firmwareFileName:
+      user.otaStatus?.firmwareFileName ||
+      user.buildPlan?.validation?.firmwareFileName ||
+      null,
+    diagnostics:
+      diagnostics && {
+        deviceId: diagnostics.deviceId || null,
+        wifiConnected: Boolean(diagnostics?.wifi?.connected),
+        wifiIp: diagnostics?.wifi?.ip || null,
+        resetReason: diagnostics?.power?.resetReason || null,
+        brownoutSuspected: Boolean(diagnostics?.power?.brownoutSuspected),
+        freeHeap: Number(diagnostics?.freeHeap || 0),
+        i2cDeviceCount,
+        gpioCount: Array.isArray(diagnostics?.gpioSnapshot) ? diagnostics.gpioSnapshot.length : 0,
+        warningCount: Array.isArray(diagnostics?.warnings) ? diagnostics.warnings.length : 0
+      },
     otaStatus: user.otaStatus || null
   };
 }
 
-function shapeDashboardResponse(users) {
+function shapeDashboardResponse(users, authSession) {
   const recentSessions = users.map(shapeDashboardSession);
+  const providerConfigured = isCallProviderConfigured();
 
   return {
-    admin: {
-      username: config.adminUsername
+    account: {
+      username: authSession.username,
+      role: authSession.role
     },
     summary: {
       totalSessions: recentSessions.length,
@@ -125,52 +155,18 @@ function shapeDashboardResponse(users) {
     services: {
       publicBaseUrl: config.publicBaseUrl,
       otaUrl: config.otaUrl,
+      callProvider: config.twilioMock ? "mock" : config.callProvider,
+      callProviderConfigured: isCallProviderConfigured(),
+      retellConfigured: isRetellConfigured(),
       twilioConfigured: isTwilioConfigured(),
       twilioMode: config.twilioMock ? "mock" : "live",
+      plivoConfigured: isPlivoConfigured(),
+      providerStatus: providerConfigured ? "configured" : "not configured",
       openaiConfigured: isOpenAIConfigured(),
       openaiMode: config.openaiMock ? "mock" : "live"
     },
     recentSessions
   };
-}
-
-async function placeOutboundCall(userId, phoneNumber) {
-  const url = absoluteUrl(`/twilio/voice/start?userId=${encodeURIComponent(userId)}`);
-
-  if (config.twilioMock) {
-    return {
-      sid: `MOCK-${Date.now()}`,
-      mock: true,
-      url
-    };
-  }
-
-  if (!isTwilioConfigured()) {
-    throw new Error(
-      "Twilio is not configured. Set Twilio credentials and TWILIO_PHONE_NUMBER, or enable TWILIO_MOCK=true."
-    );
-  }
-
-  if (!hasPublicWebhookBaseUrl()) {
-    throw new Error(
-      "PUBLIC_BASE_URL must be a public URL that Twilio can reach. Start a tunnel such as ngrok or localtunnel and set PUBLIC_BASE_URL to that HTTPS address instead of localhost."
-    );
-  }
-
-  if (isIndianPhoneNumber(phoneNumber) && isIndianPhoneNumber(config.twilioPhoneNumber)) {
-    throw new Error(
-      "Twilio cannot place outbound calls to India from an Indian caller ID. Set TWILIO_PHONE_NUMBER to a voice-capable international non-Indian Twilio number, then try again."
-    );
-  }
-
-  const client = createTwilioClient();
-
-  return client.calls.create({
-    to: phoneNumber,
-    from: config.twilioPhoneNumber,
-    url,
-    method: "POST"
-  });
 }
 
 function sanitizeSpeechValue(value) {
@@ -203,28 +199,58 @@ function parseStepCommand(value) {
   return "unknown";
 }
 
+function parseBuildOutcomeCommand(value) {
+  const spokenValue = sanitizeSpeechValue(value).toLowerCase();
+
+  if (!spokenValue) {
+    return "unknown";
+  }
+
+  if (/\b(stop|cancel|end|hang up|goodbye)\b/.test(spokenValue)) {
+    return "stop";
+  }
+
+  if (/\b(repeat|again|say again|once more)\b/.test(spokenValue)) {
+    return "repeat";
+  }
+
+  if (/\b(retry|try again|reupload|fix it|not working|does not work|isn't working|failed|no)\b/.test(spokenValue)) {
+    return "retry";
+  }
+
+  if (/\b(working|it works|works|yes|successful|done)\b/.test(spokenValue)) {
+    return "working";
+  }
+
+  return "unknown";
+}
+
+function voiceRoutePatterns(endpoint) {
+  return [`/voice/${endpoint}`, `/twilio/voice/${endpoint}`];
+}
+
 function invalidSessionResponse() {
-  const response = new VoiceResponse();
+  const response = createVoiceResponse();
   response.say("This call session is no longer valid. Please start again from the website.");
   response.hangup();
   return response;
 }
 
 function buildErrorResponse(message) {
-  const response = new VoiceResponse();
+  const response = createVoiceResponse();
   response.say(message);
   response.hangup();
   return response;
 }
 
 function pinPromptResponse(userId, attemptNumber) {
-  const response = new VoiceResponse();
+  const response = createVoiceResponse();
   response.say("Welcome to Hardware Builder. Please enter your PIN, then press the pound key.");
 
   const gather = response.gather({
     input: "dtmf",
     action: absoluteUrl(
-      `/twilio/voice/verify-pin?userId=${encodeURIComponent(
+      `/voice/verify-pin?userId=${encodeURIComponent(
         userId
       )}&attempt=${attemptNumber}`
     ),
@@ -242,7 +268,7 @@ function pinPromptResponse(userId, attemptNumber) {
 }
 
 function buildRequestPromptResponse(userId, introText) {
-  const response = new VoiceResponse();
+  const response = createVoiceResponse();
 
   if (introText) {
     response.say(introText);
@@ -250,7 +276,7 @@ function buildRequestPromptResponse(userId, introText) {
 
   const gather = response.gather({
     input: "speech",
-    action: absoluteUrl(`/twilio/voice/capture-build?userId=${encodeURIComponent(userId)}`),
+    action: absoluteUrl(`/voice/capture-build?userId=${encodeURIComponent(userId)}`),
     method: "POST",
     speechTimeout: "auto",
     language: "en-IN",
@@ -268,7 +294,7 @@ function buildRequestPromptResponse(userId, introText) {
 }
 
 function buildPlanningResponse(userId, introText) {
-  const response = new VoiceResponse();
+  const response = createVoiceResponse();
 
   if (introText) {
     response.say(introText);
@@ -282,15 +308,35 @@ function buildPlanningResponse(userId, introText) {
     {
       method: "POST"
     },
-    absoluteUrl(`/twilio/voice/build-status?userId=${encodeURIComponent(userId)}`)
+    absoluteUrl(`/voice/build-status?userId=${encodeURIComponent(userId)}`)
   );
 
   return response;
 }
 
-function buildStepResponse(user, introText) {
-  const response = new VoiceResponse();
-  const currentStep = user.buildPlan.steps[user.currentStepIndex];
+function buildUploadProgressResponse(userId, introText) {
+  const response = createVoiceResponse();
+
+  if (introText) {
+    response.say(introText);
+  }
+
+  response.pause({
+    length: 3
+  });
+
+  response.redirect(
+    {
+      method: "POST"
+    },
+    absoluteUrl(`/voice/upload-status?userId=${encodeURIComponent(userId)}`)
+  );
+
+  return response;
+}
+
+function buildBuildConfirmationResponse(userId, introText, mode = "confirm") {
+  const response = createVoiceResponse();
 
   if (introText) {
     response.say(introText);
@@ -298,7 +344,44 @@ function buildStepResponse(user, introText) {
 
   const gather = response.gather({
     input: "speech",
-    action: absoluteUrl(`/twilio/voice/confirm-step?userId=${encodeURIComponent(user.id)}`),
+    action: absoluteUrl(`/voice/confirm-build?userId=${encodeURIComponent(userId)}`),
+    method: "POST",
+    speechTimeout: "auto",
+    language: "en-IN"
+  });
+
+  if (mode === "retry") {
+    gather.say("After you correct the issue, say retry. You can also say stop.");
+  } else {
+    gather.say(
+      "Please test it now. Say working if the build works, or say not working if you want automatic diagnosis and re-upload."
+    );
+  }
+
+  response.say("I did not hear your answer. Goodbye.");
+  response.hangup();
+
+  return response;
+}
+
+function buildStepResponse(user, introText) {
+  const response = createVoiceResponse();
+  const currentStep = user.buildPlan.steps[user.currentStepIndex];
+
+  if (!currentStep) {
+    return buildUploadProgressResponse(
+      user.id,
+      introText || "The wiring steps are complete. Hardvare is moving to validation and upload."
+    );
+  }
+
+  if (introText) {
+    response.say(introText);
+  }
+
+  const gather = response.gather({
+    input: "speech",
+    action: absoluteUrl(`/voice/confirm-step?userId=${encodeURIComponent(user.id)}`),
     method: "POST",
     speechTimeout: "auto",
     language: "en-IN"
@@ -319,6 +402,7 @@ function shapeDeviceResponse(user) {
     id: user.id,
     phoneNumber: user.phoneNumber,
     esp32Id: user.esp32Id,
+    ownerUsername: user.ownerUsername || null,
     buildRequest: user.buildRequest || null,
     buildPlan:
       user.buildPlan && {
@@ -331,6 +415,7 @@ function shapeDeviceResponse(user) {
           spokenInstruction: step.spokenInstruction
         })),
         artifact: user.buildPlan.artifact || null,
+        validation: user.buildPlan.validation || null,
         generatedAt: user.buildPlan.generatedAt || null
       },
     currentStepIndex: user.currentStepIndex || 0,
@@ -338,74 +423,508 @@ function shapeDeviceResponse(user) {
   };
 }
 
-function startBuildGeneration(user, buildRequest) {
-  if (generationJobs.has(user.id)) {
-    return;
+function currentBuildStep(user) {
+  if (!user?.buildPlan?.steps?.length) {
+    return null;
   }
 
-  const job = generateBuildPlan({
-    buildRequest,
-    esp32Id: user.esp32Id
-  })
-    .then(async (buildPlan) => {
-      await updateUser(user.id, (draft) => {
+  return user.buildPlan.steps[user.currentStepIndex] || null;
+}
+
+function buildStepPayload(user, message, state = "wiring") {
+  const step = currentBuildStep(user);
+
+  return {
+    ok: true,
+    state,
+    message,
+    projectTitle: user.buildPlan?.projectTitle || null,
+    buildRequest: user.buildRequest || null,
+    stepNumber: step ? (user.currentStepIndex || 0) + 1 : null,
+    stepCount: user.buildPlan?.steps?.length || 0,
+    stepTitle: step?.title || null,
+    spokenInstruction: step?.spokenInstruction || null,
+    firmwareFileName: user.buildPlan?.validation?.firmwareFileName || null,
+    validationState: user.buildPlan?.validation?.state || null,
+    validationAttempts: user.buildPlan?.validation?.attempts || 0
+  };
+}
+
+function buildUploadPayload(user, message) {
+  return {
+    ok: true,
+    state:
+      user.otaStatus?.state === "failed"
+        ? "needs_retry"
+        : "awaiting_confirmation",
+    message,
+    projectTitle: user.buildPlan?.projectTitle || null,
+    firmwareFileName:
+      user.otaStatus?.firmwareFileName ||
+      user.buildPlan?.validation?.firmwareFileName ||
+      null,
+    uploadMode: user.otaStatus?.uploadMode || null,
+    otaState: user.otaStatus?.state || null,
+    safetySummary: user.otaStatus?.preflight?.analysis?.spokenSummary || null,
+    otaUrl: user.otaStatus?.url || config.otaUrl,
+    recovery: user.otaStatus?.recovery || null
+  };
+}
+
+function isRetellToolAuthorized(req) {
+  const expectedSecret = getRetellToolSecret();
+
+  if (!expectedSecret) {
+    return true;
+  }
+
+  return req.get("X-Hardvare-Tool-Secret") === expectedSecret;
+}
+
+function extractRetellToolArgs(body = {}) {
+  if (body && typeof body.args === "object" && body.args) {
+    return body.args;
+  }
+
+  if (body && typeof body.arguments === "object" && body.arguments) {
+    return body.arguments;
+  }
+
+  if (body && typeof body.tool_input === "object" && body.tool_input) {
+    return body.tool_input;
+  }
+
+  return body;
+}
+
+function runTrackedJob(jobMap, key, factory) {
+  if (jobMap.has(key)) {
+    return jobMap.get(key);
+  }
+
+  const job = Promise.resolve()
+    .then(factory)
+    .finally(() => {
+      jobMap.delete(key);
+    });
+
+  jobMap.set(key, job);
+  return job;
+}
+
+async function generateBuildForUser(userId, buildRequest) {
+  return runTrackedJob(generationJobs, userId, async () => {
+    const user = await getUser(userId);
+
+    if (!user) {
+      return null;
+    }
+
+    await updateUser(userId, (draft) => {
+      draft.buildRequest = buildRequest;
+      draft.buildStatus = "generating";
+      draft.buildError = null;
+      draft.buildPlan = null;
+      draft.currentStepIndex = 0;
+      draft.otaStatus = null;
+      return draft;
+    });
+
+    try {
+      const buildPlan = await createBuildDraft({
+        buildRequest,
+        esp32Id: user.esp32Id
+      });
+
+      await updateUser(userId, (draft) => {
         draft.buildRequest = buildRequest;
         draft.buildStatus = "ready";
         draft.buildError = null;
         draft.buildPlan = buildPlan;
         draft.currentStepIndex = 0;
+        draft.otaStatus = null;
         return draft;
       });
-    })
-    .catch(async (error) => {
-      await updateUser(user.id, (draft) => {
+    } catch (error) {
+      await updateUser(userId, (draft) => {
         draft.buildStatus = "failed";
         draft.buildError = error.message || "Build generation failed.";
         draft.buildPlan = null;
         draft.currentStepIndex = 0;
         return draft;
       });
-    })
-    .finally(() => {
-      generationJobs.delete(user.id);
-    });
+      throw error;
+    }
 
-  generationJobs.set(user.id, job);
+    startBuildValidation(userId);
+
+    return getUser(userId);
+  });
 }
 
-function startOtaAutomation(user) {
-  if (otaJobs.has(user.id)) {
-    return;
-  }
+function startBuildGeneration(user, buildRequest) {
+  generateBuildForUser(user.id, buildRequest).catch(() => {});
+}
 
-  const job = openOtaConsole({
-    esp32Id: user.esp32Id,
-    artifact: user.buildPlan?.artifact || null
-  })
-    .then(async (otaStatus) => {
-      await updateUser(user.id, (draft) => {
+async function validateBuildForUser(userId) {
+  return runTrackedJob(validationJobs, userId, async () => {
+    const user = await getUser(userId);
+
+    if (!user?.buildPlan) {
+      return user;
+    }
+
+    if (user.buildPlan.validation?.state === "passed") {
+      return user;
+    }
+
+    await updateUser(userId, (draft) => {
+      if (!draft.buildPlan) {
+        return draft;
+      }
+
+      draft.buildPlan.validation = {
+        ...(draft.buildPlan.validation || {}),
+        state: "running",
+        error: null
+      };
+      return draft;
+    });
+
+    try {
+      const validatedPlan = await validateBuildDraft({
+        buildRequest: user.buildRequest || user.buildPlan.projectTitle || "hardware project",
+        esp32Id: user.esp32Id,
+        plan: user.buildPlan
+      });
+
+      await updateUser(userId, (draft) => {
+        draft.buildStatus = "ready";
+        draft.buildError = null;
+        draft.buildPlan = validatedPlan;
+        return draft;
+      });
+    } catch (error) {
+      await updateUser(userId, (draft) => {
+        if (!draft.buildPlan) {
+          return draft;
+        }
+
+        draft.buildStatus = "ready";
+        draft.buildError = error.message || "Build validation failed.";
+        draft.buildPlan.validation = {
+          ...(draft.buildPlan.validation || {}),
+          state: "failed",
+          validatedAt: new Date().toISOString(),
+          error: error.message || "Build validation failed.",
+          compileLog: error.compileLog || error.message || ""
+        };
+        return draft;
+      });
+      throw error;
+    }
+
+    return getUser(userId);
+  });
+}
+
+function startBuildValidation(userId) {
+  validateBuildForUser(userId).catch(() => {});
+}
+
+async function ensureValidatedBuildForUser(userId) {
+  try {
+    return await validateBuildForUser(userId);
+  } catch {
+    return getUser(userId);
+  }
+}
+
+async function runOtaForUser(userId, runMode = "initial") {
+  return runTrackedJob(otaJobs, userId, async () => {
+    const user = await ensureValidatedBuildForUser(userId);
+
+    if (!user) {
+      return null;
+    }
+
+    if (!user.buildPlan?.artifact) {
+      throw new Error("No validated firmware is available for this build session.");
+    }
+
+    if (user.buildPlan.validation?.state !== "passed") {
+      throw new Error(
+        user.buildPlan.validation?.error ||
+          user.buildError ||
+          "The firmware is not validated yet, so Hardvare cannot upload it."
+      );
+    }
+
+    await updateUser(userId, (draft) => {
+      draft.otaStatus = {
+        state: "opening",
+        runMode,
+        requestedAt: new Date().toISOString(),
+        previousResult: runMode === "recovery" ? draft.otaStatus || null : null
+      };
+      return draft;
+    });
+
+    try {
+      const otaStatus = await openOtaConsole({
+        esp32Id: user.esp32Id,
+        artifact: user.buildPlan?.artifact || null,
+        runMode
+      });
+
+      await updateUser(userId, (draft) => {
         draft.otaStatus = {
-          state: "opened",
+          state: "uploaded",
           ...otaStatus
         };
         return draft;
       });
-    })
-    .catch(async (error) => {
-      await updateUser(user.id, (draft) => {
+    } catch (error) {
+      await updateUser(userId, (draft) => {
         draft.otaStatus = {
           state: "failed",
           failedAt: new Date().toISOString(),
-          error: error.message
+          runMode,
+          error: error.message,
+          preflight: error.preflight || draft.otaStatus?.preflight || null
         };
         return draft;
       });
-    })
-    .finally(() => {
-      otaJobs.delete(user.id);
+      throw error;
+    }
+
+    return getUser(userId);
+  });
+}
+
+function startOtaAutomation(user, runMode = "initial") {
+  runOtaForUser(user.id, runMode).catch(() => {});
+}
+
+async function verifySessionPin(userId, pin) {
+  const user = await getUser(userId);
+
+  if (!user) {
+    return {
+      ok: false,
+      state: "invalid_session",
+      message: "This Hardvare session is no longer valid. Please start again from hardvare.com."
+    };
+  }
+
+  const normalizedPin = normalizePin(pin);
+  const attemptCount = Number(user.pinAttemptCount || 0);
+
+  if (!isValidPin(normalizedPin) || !verifyPin(normalizedPin, user)) {
+    const nextAttemptCount = attemptCount + 1;
+    const attemptsRemaining = Math.max(0, config.maxPinAttempts - nextAttemptCount);
+
+    await updateUser(userId, (draft) => {
+      draft.pinAttemptCount = nextAttemptCount;
+      draft.pinVerifiedAt = null;
+      return draft;
     });
 
-  otaJobs.set(user.id, job);
+    return {
+      ok: false,
+      state: attemptsRemaining > 0 ? "pin_retry" : "pin_locked",
+      attemptsRemaining,
+      message:
+        attemptsRemaining > 0
+          ? `That PIN is not correct. ${attemptsRemaining} attempt${attemptsRemaining === 1 ? "" : "s"} remaining.`
+          : "That PIN is not correct and the session is locked. Please start again from hardvare.com."
+    };
+  }
+
+  await updateUser(userId, (draft) => {
+    draft.pinAttemptCount = 0;
+    draft.pinVerifiedAt = new Date().toISOString();
+    return draft;
+  });
+
+  return {
+    ok: true,
+    state: "pin_verified",
+    attemptsRemaining: config.maxPinAttempts,
+    message: "PIN accepted. Ask what they want to build on this ESP device."
+  };
+}
+
+async function advanceBuildForUser(userId, action, { syncUpload = false } = {}) {
+  const user = await getUser(userId);
+
+  if (!user) {
+    return {
+      ok: false,
+      state: "invalid_session",
+      message: "This Hardvare session is no longer valid. Please start again from hardvare.com."
+    };
+  }
+
+  if (!user.pinVerifiedAt) {
+    return {
+      ok: false,
+      state: "pin_required",
+      message: "Verify the PIN before continuing with the build."
+    };
+  }
+
+  if (!user.buildPlan?.steps?.length) {
+    return {
+      ok: false,
+      state: "build_missing",
+      message: "No build plan is ready yet. Prepare the build plan before advancing steps."
+    };
+  }
+
+  if (action === "repeat") {
+    return buildStepPayload(user, "Repeat the current connection exactly as written.");
+  }
+
+  if (action === "back") {
+    if ((user.currentStepIndex || 0) === 0) {
+      return buildStepPayload(user, "You are already on the first connection.");
+    }
+
+    await updateUser(userId, (draft) => {
+      draft.currentStepIndex = Math.max(0, (draft.currentStepIndex || 0) - 1);
+      return draft;
+    });
+
+    return buildStepPayload(await getUser(userId), "Go back one connection.");
+  }
+
+  if (action !== "confirm") {
+    return {
+      ok: false,
+      state: "invalid_action",
+      message: "Use confirm, repeat, or back."
+    };
+  }
+
+  const nextStepIndex = (user.currentStepIndex || 0) + 1;
+
+  if (nextStepIndex < user.buildPlan.steps.length) {
+    await updateUser(userId, (draft) => {
+      draft.currentStepIndex = nextStepIndex;
+      return draft;
+    });
+
+    return buildStepPayload(await getUser(userId), "Move to the next connection.");
+  }
+
+  if (!syncUpload) {
+    await updateUser(userId, (draft) => {
+      draft.currentStepIndex = user.buildPlan.steps.length;
+      draft.otaStatus = {
+        state: "opening",
+        runMode: "initial",
+        requestedAt: new Date().toISOString()
+      };
+      return draft;
+    });
+
+    startOtaAutomation(user, "initial");
+
+    return {
+      ok: true,
+      state: "uploading",
+      message:
+        "All wiring is complete. Hardvare is scanning the board, validating the build, and uploading the code automatically now."
+    };
+  }
+
+  await updateUser(userId, (draft) => {
+    draft.currentStepIndex = user.buildPlan.steps.length;
+    return draft;
+  });
+
+  try {
+    const uploadedUser = await runOtaForUser(userId, "initial");
+    return buildUploadPayload(
+      uploadedUser,
+      "The code has been generated, validated, and uploaded with the Hardvare system. Ask the caller whether the device is working."
+    );
+  } catch (error) {
+    return buildUploadPayload(
+      await getUser(userId),
+      `The automatic upload needs attention. ${error.message || "Ask the caller if they want another diagnosis and re-upload."}`.trim()
+    );
+  }
+}
+
+async function diagnoseAndReupload(userId) {
+  const user = await getUser(userId);
+
+  if (!user) {
+    return {
+      ok: false,
+      state: "invalid_session",
+      message: "This Hardvare session is no longer valid. Please start again from hardvare.com."
+    };
+  }
+
+  if (!user.buildPlan?.artifact) {
+    return {
+      ok: false,
+      state: "build_missing",
+      message: "No build plan is available to diagnose."
+    };
+  }
+
+  try {
+    const uploadedUser = await runOtaForUser(userId, "recovery");
+    return buildUploadPayload(
+      uploadedUser,
+      "Hardvare finished the diagnosis and re-upload. Ask the caller to test the device again."
+    );
+  } catch (error) {
+    return buildUploadPayload(
+      await getUser(userId),
+      `Hardvare ran the diagnosis and still needs attention. ${error.message || ""}`.trim()
+    );
+  }
+}
+
+async function recordBuildOutcome(userId, outcome, feedback = "") {
+  const user = await getUser(userId);
+
+  if (!user) {
+    return {
+      ok: false,
+      state: "invalid_session",
+      message: "This Hardvare session is no longer valid. Please start again from hardvare.com."
+    };
+  }
+
+  await updateUser(userId, (draft) => {
+    draft.buildOutcome = outcome;
+    draft.buildOutcomeFeedback = String(feedback || "").trim();
+    draft.buildOutcomeAt = new Date().toISOString();
+    return draft;
+  });
+
+  if (user.devicePblId && outcome === "working") {
+    await incrementDeviceBuildCount(user.devicePblId);
+  }
+
+  if (user.devicePblId && feedback) {
+    await updateDeviceFeedback(user.devicePblId, feedback);
+  }
+
+  return {
+    ok: true,
+    state: outcome,
+    message:
+      outcome === "working"
+        ? "Great. The working result is saved."
+        : "The final session outcome is saved."
+  };
 }
 
 function createApp() {
@@ -413,12 +932,29 @@ function createApp() {
 
   app.use(express.json());
   app.use(express.urlencoded({ extended: false }));
+  app.use((req, res, next) => {
+    if (
+      req.path === "/" ||
+      req.path === "/index.html" ||
+      req.path === "/app.js" ||
+      req.path === "/styles.css" ||
+      req.path.startsWith("/api/")
+    ) {
+      res.set("Cache-Control", "no-store, max-age=0");
+    }
+
+    next();
+  });
   app.use(express.static(path.join(__dirname, "..", "public")));
   app.use("/generated", express.static(path.join(__dirname, "..", "generated")));
 
   app.get("/health", (_req, res) => {
     res.json({
       ok: true,
+      callProvider: config.twilioMock ? "mock" : config.callProvider,
+      callProviderConfigured: isCallProviderConfigured(),
+      retellConfigured: isRetellConfigured(),
+      plivoConfigured: isPlivoConfigured(),
       twilioConfigured: isTwilioConfigured(),
       twilioMock: config.twilioMock,
       openaiConfigured: isOpenAIConfigured(),
@@ -426,8 +962,8 @@ function createApp() {
     });
   });
 
-  app.get("/api/admin/session", (req, res) => {
-    const session = getAdminSession(req);
+  function sendSessionResponse(req, res) {
+    const session = getAuthSession(req);
 
     if (!session) {
       return res.json({
@@ -438,51 +974,111 @@ function createApp() {
     return res.json({
       authenticated: true,
       username: session.username,
+      role: session.role,
       expiresAt: new Date(session.expiresAt).toISOString()
     });
-  });
+  }
 
-  app.post("/api/admin/login", (req, res) => {
-    const username = String(req.body.username || "").trim();
-    const password = String(req.body.password || "");
-
-    if (!isValidAdminCredentials(username, password)) {
-      return res.status(401).json({
-        error: "Incorrect admin username or password."
-      });
-    }
-
-    const session = createAdminSession();
-    res.setHeader("Set-Cookie", session.cookie);
-
-    return res.status(201).json({
-      message: "Admin login successful.",
-      username: config.adminUsername,
-      expiresAt: new Date(session.expiresAt).toISOString()
-    });
-  });
-
-  app.post("/api/admin/logout", (req, res) => {
-    res.setHeader("Set-Cookie", clearAdminSession(req));
-    return res.json({
-      message: "Admin logout successful."
-    });
-  });
-
-  app.get("/api/admin/dashboard", requireAdmin, async (_req, res, next) => {
+  async function handleLogin(req, res, next) {
     try {
-      const users = await listUsers(25);
-      return res.json(shapeDashboardResponse(users));
+      const username = normalizeUsername(req.body.username);
+      const password = normalizePassword(req.body.password);
+      const account = await authenticateCredentials(username, password);
+
+      if (!account) {
+        return res.status(401).json({
+          error: "Incorrect username or password."
+        });
+      }
+
+      const session = createAuthSession(account);
+      res.setHeader("Set-Cookie", session.cookie);
+
+      return res.status(201).json({
+        message: "Login successful.",
+        username: account.username,
+        role: account.role,
+        expiresAt: new Date(session.expiresAt).toISOString()
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  async function handleRegisterAccount(req, res, next) {
+    try {
+      const username = normalizeUsername(req.body.username);
+      const password = normalizePassword(req.body.password);
+      const confirmPassword = normalizePassword(
+        req.body.confirmPassword || req.body.passwordConfirmation
+      );
+
+      if (!isValidUsername(username)) {
+        return res.status(400).json({
+          error: "Username must be 3 to 32 characters using letters, numbers, dots, underscores, or hyphens."
+        });
+      }
+
+      if (!isValidPassword(password)) {
+        return res.status(400).json({
+          error: "Password must be 4 to 72 characters and cannot be blank."
+        });
+      }
+
+      if (confirmPassword && password !== confirmPassword) {
+        return res.status(400).json({
+          error: "Password confirmation does not match."
+        });
+      }
+
+      const account = await createAccount({
+        username,
+        password,
+        role: "user"
+      });
+      const session = createAuthSession(account);
+      res.setHeader("Set-Cookie", session.cookie);
+
+      return res.status(201).json({
+        message: "Account created and signed in successfully.",
+        username: account.username,
+        role: account.role,
+        expiresAt: new Date(session.expiresAt).toISOString()
+      });
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  function handleLogout(req, res) {
+    res.setHeader("Set-Cookie", clearAuthSession(req));
+    return res.json({
+      message: "Logout successful."
+    });
+  }
+
+  app.get(["/api/auth/session", "/api/admin/session"], sendSessionResponse);
+  app.post(["/api/auth/login", "/api/admin/login"], handleLogin);
+  app.post("/api/auth/register", handleRegisterAccount);
+  app.post(["/api/auth/logout", "/api/admin/logout"], handleLogout);
+
+  app.get(["/api/dashboard", "/api/admin/dashboard"], requireAuth, async (req, res, next) => {
+    try {
+      const users = await listUsers(25, {
+        ownerAccountId: req.authSession.role === "admin" ? null : req.authSession.accountId
+      });
+
+      return res.json(shapeDashboardResponse(users, req.authSession));
     } catch (error) {
       return next(error);
     }
   });
 
-  app.get("/api/device/:esp32Id", requireAdmin, async (req, res) => {
+  app.get("/api/device/:esp32Id", requireAuth, async (req, res) => {
     const esp32Id = normalizeEspDeviceId(req.params.esp32Id);
     const user = await getUserByDeviceId(esp32Id);
 
-    if (!user) {
+    if (!user || !canAccessSession(req.authSession, user)) {
       return res.status(404).json({
         error: "No build session was found for that ESP32 ID."
       });
@@ -491,7 +1087,7 @@ function createApp() {
     return res.json(shapeDeviceResponse(user));
   });
 
-  app.post("/api/register", requireAdmin, async (req, res, next) => {
+  app.post("/api/register", requireAuth, async (req, res, next) => {
     try {
       const phoneNumber = normalizePhoneNumber(req.body.phoneNumber);
       const pin = normalizePin(req.body.pin);
@@ -500,7 +1096,7 @@ function createApp() {
       if (!isValidPhoneNumber(phoneNumber)) {
         return res.status(400).json({
           error:
-            "Use an international phone number in E.164 format, for example +919876543210."
+            "Enter a phone number with at least 7 digits. Spaces, dashes, parentheses, and a leading plus sign are okay."
         });
       }
 
@@ -522,8 +1118,18 @@ function createApp() {
         );
       }
 
-      const user = await upsertUser({ phoneNumber, pin, esp32Id });
-      const call = await placeOutboundCall(user.id, user.phoneNumber);
+      const user = await createCallSession({
+        phoneNumber,
+        pin,
+        esp32Id,
+        ownerAccountId: req.authSession.accountId,
+        ownerUsername: req.authSession.username
+      });
+      const call = await placeOutboundCall({
+        phoneNumber: user.phoneNumber,
+        answerUrl: absoluteUrl(`/voice/start?userId=${encodeURIComponent(user.id)}`),
+        user
+      });
 
       await setLastCallSid(user.id, call.sid);
 
@@ -531,17 +1137,129 @@ function createApp() {
         message:
           "Call started. Answer the phone, enter your PIN, and tell Hardware Builder what you want to build.",
         callSid: call.sid,
+        provider: call.provider || (config.twilioMock ? "mock" : config.callProvider),
         mode: call.mock ? "mock" : "live",
         phoneNumber: user.phoneNumber,
         esp32Id: user.esp32Id,
-        voiceWebhook: call.url || absoluteUrl(`/twilio/voice/start?userId=${user.id}`)
+        createdBy: req.authSession.username,
+        voiceWebhook: call.url || absoluteUrl(`/voice/start?userId=${user.id}`)
       });
     } catch (error) {
       next(error);
     }
   });
 
-  app.all("/twilio/voice/start", async (req, res) => {
+  app.post("/api/retell/tool/:toolName", async (req, res, next) => {
+    try {
+      if (!isRetellToolAuthorized(req)) {
+        return res.status(401).json({
+          ok: false,
+          state: "unauthorized",
+          message: "This Retell tool request is not authorized."
+        });
+      }
+
+      const toolName = String(req.params.toolName || "").trim().toLowerCase();
+      const args = extractRetellToolArgs(req.body);
+      const sessionId = String(args.session_id || args.sessionId || "").trim();
+
+      if (!sessionId) {
+        return res.status(400).json({
+          ok: false,
+          state: "missing_session",
+          message: "The Hardvare session id is required."
+        });
+      }
+
+      if (toolName === "verify-pin") {
+        return res.json(
+          await verifySessionPin(sessionId, args.pin || args.user_pin || args.digits)
+        );
+      }
+
+      if (toolName === "prepare-build") {
+        const buildRequest = sanitizeSpeechValue(
+          args.build_request || args.buildRequest || args.request
+        );
+        const user = await getUser(sessionId);
+
+        if (!user) {
+          return res.status(404).json({
+            ok: false,
+            state: "invalid_session",
+            message: "This Hardvare session is no longer valid. Please start again from hardvare.com."
+          });
+        }
+
+        if (!user.pinVerifiedAt) {
+          return res.status(400).json({
+            ok: false,
+            state: "pin_required",
+            message: "Verify the PIN before generating the build plan."
+          });
+        }
+
+        if (!buildRequest) {
+          return res.status(400).json({
+            ok: false,
+            state: "missing_build_request",
+            message: "Describe what the caller wants to build before preparing the plan."
+          });
+        }
+
+        try {
+          const generatedUser = await generateBuildForUser(sessionId, buildRequest);
+          return res.json(
+            buildStepPayload(
+              generatedUser,
+              `Build plan ready for ${generatedUser.buildPlan.projectTitle}. Read the intro, then guide the caller through the first wiring step. Hardvare is validating the code in the background while the caller starts wiring.`,
+              "wiring"
+            )
+          );
+        } catch (error) {
+          const failedUser = await getUser(sessionId);
+          return res.json({
+            ok: false,
+            state: "build_failed",
+            message: failedUser?.buildError || error.message || "Build generation failed."
+          });
+        }
+      }
+
+      if (toolName === "advance-step") {
+        const action = String(args.action || "").trim().toLowerCase();
+        return res.json(
+          await advanceBuildForUser(sessionId, action, {
+            syncUpload: true
+          })
+        );
+      }
+
+      if (toolName === "diagnose-build") {
+        return res.json(await diagnoseAndReupload(sessionId));
+      }
+
+      if (toolName === "record-outcome") {
+        return res.json(
+          await recordBuildOutcome(
+            sessionId,
+            String(args.outcome || "").trim().toLowerCase(),
+            sanitizeSpeechValue(args.feedback || "")
+          )
+        );
+      }
+
+      return res.status(404).json({
+        ok: false,
+        state: "unknown_tool",
+        message: `Unknown Retell tool ${toolName}.`
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.all(voiceRoutePatterns("start"), async (req, res) => {
     const user = await getUser(String(req.query.userId || ""));
     const attempt = Number.parseInt(String(req.query.attempt || "1"), 10) || 1;
 
@@ -552,17 +1270,17 @@ function createApp() {
     return xmlResponse(res, pinPromptResponse(user.id, attempt));
   });
 
-  app.all("/twilio/voice/verify-pin", async (req, res) => {
+  app.all(voiceRoutePatterns("verify-pin"), async (req, res) => {
     const user = await getUser(String(req.query.userId || ""));
     const attempt = Number.parseInt(String(req.query.attempt || "1"), 10) || 1;
-    const enteredPin = normalizePin(req.body.Digits);
+    const enteredPin = normalizePin(getCallProviderInput(req.body).digits);
 
     if (!user) {
       return xmlResponse(res, invalidSessionResponse());
     }
 
     if (!isValidPin(enteredPin) || !verifyPin(enteredPin, user)) {
-      const response = new VoiceResponse();
+      const response = createVoiceResponse();
 
       if (attempt >= config.maxPinAttempts) {
         response.say("That PIN was not correct. You have used all allowed attempts. Goodbye.");
@@ -574,7 +1292,7 @@ function createApp() {
       response.redirect(
         { method: "POST" },
         absoluteUrl(
-          `/twilio/voice/start?userId=${encodeURIComponent(user.id)}&attempt=${
+          `/voice/start?userId=${encodeURIComponent(user.id)}&attempt=${
             attempt + 1
           }`
         )
@@ -586,9 +1304,10 @@ function createApp() {
     return xmlResponse(res, buildRequestPromptResponse(user.id, "PIN accepted."));
   });
 
-  app.all("/twilio/voice/capture-build", async (req, res) => {
+  app.all(voiceRoutePatterns("capture-build"), async (req, res) => {
     const user = await getUser(String(req.query.userId || ""));
-    const buildRequest = sanitizeSpeechValue(req.body.SpeechResult || req.body.Digits);
+    const providerInput = getCallProviderInput(req.body);
+    const buildRequest = sanitizeSpeechValue(providerInput.speech || providerInput.digits);
 
     if (!user) {
       return xmlResponse(res, invalidSessionResponse());
@@ -622,7 +1341,7 @@ function createApp() {
     );
   });
 
-  app.all("/twilio/voice/build-status", async (req, res) => {
+  app.all(voiceRoutePatterns("build-status"), async (req, res) => {
     const user = await getUser(String(req.query.userId || ""));
 
     if (!user) {
@@ -653,21 +1372,22 @@ function createApp() {
       res,
       buildStepResponse(
         user,
-        `I created a build plan for ${user.buildPlan.projectTitle}. ${user.buildPlan.spokenIntro}. I also saved the code for your device ${user.esp32Id}. Let's start wiring with the first pin.`
+        `I created a build plan for ${user.buildPlan.projectTitle}. ${user.buildPlan.spokenIntro}. Hardvare is validating the code while we start wiring. Let's begin with the first pin.`
       )
     );
   });
 
-  app.all("/twilio/voice/confirm-step", async (req, res) => {
+  app.all(voiceRoutePatterns("confirm-step"), async (req, res) => {
     const user = await getUser(String(req.query.userId || ""));
-    const command = parseStepCommand(req.body.SpeechResult || req.body.Digits);
+    const providerInput = getCallProviderInput(req.body);
+    const command = parseStepCommand(providerInput.speech || providerInput.digits);
 
     if (!user || !user.buildPlan || !Array.isArray(user.buildPlan.steps)) {
       return xmlResponse(res, invalidSessionResponse());
     }
 
     if (command === "stop") {
-      const response = new VoiceResponse();
+      const response = createVoiceResponse();
       response.say("Okay. I am ending the call. Goodbye.");
       response.hangup();
       return xmlResponse(res, response);
@@ -731,17 +1451,137 @@ function createApp() {
       draft.currentStepIndex = user.buildPlan.steps.length;
       draft.otaStatus = {
         state: "opening",
+        runMode: "initial",
         requestedAt: new Date().toISOString()
       };
       return draft;
     });
 
-    startOtaAutomation(user);
+    startOtaAutomation(user, "initial");
 
     return xmlResponse(
       res,
-      buildErrorResponse(
-        `Excellent. All wiring steps are complete. I am opening Chrome, signing in to the OTA page, and uploading the code for device ${user.esp32Id}. Goodbye.`
+      buildUploadProgressResponse(
+        user.id,
+        `Excellent. All wiring steps are complete. Safety first. I am scanning the hardware, validating the build, and uploading the code automatically for device ${user.esp32Id}. Please stay on the call.`
+      )
+    );
+  });
+
+  app.all(voiceRoutePatterns("upload-status"), async (req, res) => {
+    const user = await getUser(String(req.query.userId || ""));
+
+    if (!user) {
+      return xmlResponse(res, invalidSessionResponse());
+    }
+
+    if (!user.otaStatus || ["opening"].includes(user.otaStatus.state)) {
+      return xmlResponse(
+        res,
+        buildUploadProgressResponse(
+          user.id,
+          "I am still running the safety scan and OTA upload. Please stay on the call."
+        )
+      );
+    }
+
+    if (user.otaStatus.state === "failed") {
+      const preflightSummary =
+        user.otaStatus?.preflight?.analysis?.spokenSummary ||
+        user.otaStatus?.preflight?.analysis?.criticalIssues?.join(" ") ||
+        "";
+
+      return xmlResponse(
+        res,
+        buildBuildConfirmationResponse(
+          user.id,
+          `Safety first. I paused the automatic upload. ${preflightSummary} ${user.otaStatus.error || ""}`.trim(),
+          "retry"
+        )
+      );
+    }
+
+    const spokenSummary = user.otaStatus?.preflight?.analysis?.spokenSummary;
+    const introText =
+      user.otaStatus?.runMode === "recovery"
+        ? `I finished automatic diagnosis and re-uploaded the code. ${spokenSummary || ""}`.trim()
+        : `Safety scan complete and code uploaded automatically. ${spokenSummary || ""}`.trim();
+
+    return xmlResponse(
+      res,
+      buildBuildConfirmationResponse(user.id, introText, "confirm")
+    );
+  });
+
+  app.all(voiceRoutePatterns("confirm-build"), async (req, res) => {
+    const user = await getUser(String(req.query.userId || ""));
+    const providerInput = getCallProviderInput(req.body);
+    const command = parseBuildOutcomeCommand(providerInput.speech || providerInput.digits);
+
+    if (!user) {
+      return xmlResponse(res, invalidSessionResponse());
+    }
+
+    if (command === "stop") {
+      const response = createVoiceResponse();
+      response.say("Okay. I am ending the call. Stay safe and double check power before the next test.");
+      response.hangup();
+      return xmlResponse(res, response);
+    }
+
+    if (command === "working") {
+      const response = createVoiceResponse();
+      response.say(
+        "Great. The code is uploaded and your build is working. Safety first: keep power stable and check wiring before the next change. Goodbye."
+      );
+      response.hangup();
+      return xmlResponse(res, response);
+    }
+
+    if (command === "retry") {
+      await updateUser(user.id, (draft) => {
+        draft.otaStatus = {
+          state: "opening",
+          runMode: "recovery",
+          requestedAt: new Date().toISOString(),
+          previousResult: draft.otaStatus || null
+        };
+        return draft;
+      });
+
+      const refreshedUser = await getUser(user.id);
+      startOtaAutomation(refreshedUser, "recovery");
+
+      return xmlResponse(
+        res,
+        buildUploadProgressResponse(
+          user.id,
+          "I am running automatic diagnosis, checking safety again, and re-uploading the code. Please stay on the call."
+        )
+      );
+    }
+
+    if (command === "repeat") {
+      const mode = user.otaStatus?.state === "failed" ? "retry" : "confirm";
+      const spokenSummary = user.otaStatus?.preflight?.analysis?.spokenSummary || "";
+      const introText =
+        mode === "retry"
+          ? `Safety first. ${spokenSummary} ${user.otaStatus?.error || ""}`.trim()
+          : `I uploaded the code. ${spokenSummary}`.trim();
+
+      return xmlResponse(
+        res,
+        buildBuildConfirmationResponse(user.id, introText, mode)
+      );
+    }
+
+    return xmlResponse(
+      res,
+      buildBuildConfirmationResponse(
+        user.id,
+        user.otaStatus?.state === "failed"
+          ? "Say retry after you correct the issue, or say stop."
+          : "Please say working or not working."
       )
     );
   });

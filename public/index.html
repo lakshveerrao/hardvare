@@ -3,147 +3,417 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Hardware Builder Dashboard</title>
-    <link rel="stylesheet" href="/styles.css">
+    <title>Hardvare | Build Hardware Over a Phone Call</title>
+    <meta
+      name="description"
+      content="Build hardware over a phone call. Hardvare guides wiring, generates code, validates the setup, pushes OTA, and helps debug until it works."
+    >
+    <link rel="stylesheet" href="/styles.css?v=20260314-homepage">
   </head>
   <body>
-    <main class="page-shell">
-      <section class="hero-card">
-        <p class="eyebrow">ESP Hardware Builder</p>
-        <h1>Dashboard, calls, and OTA in one link</h1>
-        <p class="lede">
-          Sign in with the admin account, start a real phone call, collect the ESP32 ID,
-          guide the caller pin by pin, and then open the OTA updater automatically.
-        </p>
+    <div class="site-shell">
+      <header class="site-header">
+        <a class="brand-lockup" href="/" aria-label="Hardvare home">
+          <span class="brand-name">Hardvare</span>
+          <span class="brand-engine">Powered by PBLClaw</span>
+        </a>
 
-        <div class="topic-grid">
-          <div>Admin login without Gmail</div>
-          <div>Dashboard for device sessions</div>
-          <div>Live call launch from the page</div>
-          <div>Voice-first build instructions</div>
-          <div>Generated sketch download links</div>
-          <div>OTA target and service status</div>
-        </div>
-      </section>
+        <nav class="site-nav" aria-label="Primary">
+          <a href="#how-it-works">How it works</a>
+          <a href="#pblclaw">PBLClaw</a>
+          <a href="#access-section">Create account</a>
+        </nav>
+      </header>
 
-      <section class="auth-card" id="login-section">
-        <p class="eyebrow">Admin Login</p>
-        <h2>Sign in to the dashboard</h2>
-        <p class="lede compact">
-          This uses a local admin username and password. No Gmail login is needed.
-        </p>
+      <main class="site-main">
+        <section class="hero-section section-block">
+          <div class="hero-stack">
+            <p class="hero-label">Powered by PBLClaw</p>
+            <h1>
+              <span>Build hardware</span>
+              <span>over a phone call.</span>
+            </h1>
+            <p class="hero-summary">
+              Hardvare helps plan the setup, guide the wiring, validate the board, write the code,
+              and debug until it works.
+            </p>
 
-        <form id="login-form" novalidate>
-          <label for="username">Admin Username</label>
-          <input
-            id="username"
-            name="username"
-            type="text"
-            autocomplete="username"
-            value="esphardvare"
-            required
-          >
+            <div class="hero-actions">
+              <a class="button button-primary" href="#access-section" data-start-build-link>
+                Start a build call
+              </a>
+            </div>
 
-          <label for="password">Password</label>
-          <input
-            id="password"
-            name="password"
-            type="password"
-            autocomplete="current-password"
-            placeholder="espadmin"
-            required
-          >
+            <div class="hero-visual" aria-hidden="true">
+              <div class="visual-agent-core">
+                <span>PBLClaw</span>
+              </div>
+              <div class="visual-signal visual-signal-left"></div>
+              <div class="visual-signal visual-signal-right"></div>
+              <div class="visual-caller">
+                <span class="visual-head"></span>
+                <span class="visual-body"></span>
+                <span class="visual-phone"></span>
+              </div>
+              <div class="visual-board">
+                <span class="visual-board-chip"></span>
+                <span class="visual-pin visual-pin-top-1"></span>
+                <span class="visual-pin visual-pin-top-2"></span>
+                <span class="visual-pin visual-pin-top-3"></span>
+                <span class="visual-pin visual-pin-bottom-1"></span>
+                <span class="visual-pin visual-pin-bottom-2"></span>
+                <span class="visual-pin visual-pin-bottom-3"></span>
+              </div>
+            </div>
+          </div>
+        </section>
 
-          <button type="submit" id="login-button">Login</button>
-        </form>
-
-        <div class="help-text">
-          Admin username: <strong>esphardvare</strong>. Password: <strong>espadmin</strong>.
-        </div>
-
-        <div id="login-status" class="status-panel" aria-live="polite"></div>
-      </section>
-
-      <section class="dashboard-card hidden" id="dashboard-section">
-        <div class="dashboard-topbar">
-          <div>
-            <p class="eyebrow">Dashboard</p>
-            <h2>Welcome, <span id="auth-username">Admin</span></h2>
+        <section class="section-block" id="why-this-exists">
+          <div class="section-heading">
+            <p class="section-kicker">Why this exists</p>
+            <h2>Most builds fail before they begin.</h2>
           </div>
 
-          <button type="button" class="ghost-button" id="logout-button">Logout</button>
-        </div>
+          <div class="statement-card">
+            <p>
+              Hardware is still blocked by setup friction: IDEs, libraries, board packages, broken
+              examples, and debugging overhead. Hardvare removes that burden through a phone call.
+            </p>
+          </div>
+        </section>
 
-        <p class="lede compact">
-          Start outbound calls, monitor recent ESP sessions, and confirm the OTA page target.
-        </p>
+        <section class="section-block" id="how-it-works">
+          <div class="section-heading">
+            <p class="section-kicker">How it works</p>
+            <h2>How it works</h2>
+          </div>
 
-        <div id="dashboard-metrics" class="metric-grid"></div>
-        <div id="service-status" class="service-grid"></div>
+          <div class="step-grid">
+            <article class="step-card">
+              <span>01</span>
+              <h3>Power the board</h3>
+            </article>
+            <article class="step-card">
+              <span>02</span>
+              <h3>Enter your number and device ID</h3>
+            </article>
+            <article class="step-card">
+              <span>03</span>
+              <h3>Get the call</h3>
+            </article>
+            <article class="step-card">
+              <span>04</span>
+              <h3>Say what you want to build</h3>
+            </article>
+            <article class="step-card">
+              <span>05</span>
+              <h3>Follow live guidance</h3>
+            </article>
+            <article class="step-card">
+              <span>06</span>
+              <h3>Code is generated, validated, and pushed</h3>
+            </article>
+            <article class="step-card">
+              <span>07</span>
+              <h3>Confirm success or debug live</h3>
+            </article>
+          </div>
+        </section>
 
-        <div class="dashboard-layout">
-          <section class="dashboard-panel">
-            <div class="panel-header">
-              <h3>Start Call</h3>
-              <p>Launch a phone call and tie it to your ESP32 ID.</p>
+        <section class="section-block" id="pblclaw">
+          <div class="section-heading">
+            <p class="section-kicker">Powered by PBLClaw</p>
+            <h2>Powered by PBLClaw</h2>
+          </div>
+
+          <div class="split-layout">
+            <div class="statement-card">
+              <p>
+                Hardvare runs on PBLClaw, the hardware-aware agent engine behind the call. It
+                interprets intent, asks follow-up questions, understands boards and components, plans
+                validation, generates code, and guides debugging.
+              </p>
             </div>
 
-            <form id="call-form" novalidate>
-              <label for="phoneNumber">Phone Number</label>
-              <input
-                id="phoneNumber"
-                name="phoneNumber"
-                type="tel"
-                inputmode="tel"
-                placeholder="+919876543210"
-                required
-              >
+            <div class="capability-grid">
+              <article class="capability-card"><h3>Intent</h3></article>
+              <article class="capability-card"><h3>Boards</h3></article>
+              <article class="capability-card"><h3>Components</h3></article>
+              <article class="capability-card"><h3>Pin maps</h3></article>
+              <article class="capability-card"><h3>Validation</h3></article>
+              <article class="capability-card"><h3>I2C scans</h3></article>
+              <article class="capability-card"><h3>Code</h3></article>
+              <article class="capability-card"><h3>Debug</h3></article>
+            </div>
+          </div>
+        </section>
 
-              <label for="pin">PIN</label>
-              <input
-                id="pin"
-                name="pin"
-                type="password"
-                inputmode="numeric"
-                pattern="[0-9]*"
-                maxlength="8"
-                placeholder="4 to 8 digits"
-                required
-              >
+        <section class="section-block" id="who-its-for">
+          <div class="section-heading">
+            <p class="section-kicker">Who this is for</p>
+            <h2>Built for people blocked by tooling</h2>
+          </div>
 
-              <label for="esp32Id">ESP32 ID</label>
-              <input
-                id="esp32Id"
-                name="esp32Id"
-                type="text"
-                placeholder="pbl-129872L"
-                value="pbl-129872L"
-                required
-              >
+          <div class="audience-grid">
+            <article class="audience-card"><h3>First-time makers</h3></article>
+            <article class="audience-card"><h3>Students</h3></article>
+            <article class="audience-card"><h3>Parents helping kids build</h3></article>
+            <article class="audience-card"><h3>Teachers</h3></article>
+            <article class="audience-card"><h3>Tinkerers stuck on setup</h3></article>
+            <article class="audience-card"><h3>People who can wire but cannot code</h3></article>
+            <article class="audience-card"><h3>People who can code but hate hardware friction</h3></article>
+          </div>
+        </section>
 
-              <button type="submit" id="submit-button">Start Call</button>
-            </form>
+        <section class="section-block" id="platform-memory">
+          <div class="section-heading">
+            <p class="section-kicker">Platform memory</p>
+            <h2>The system remembers the hard parts.</h2>
+          </div>
 
-            <div class="help-text">
-              Use the full phone number with the leading plus sign. The same PIN must be
-              entered on the phone call.
+          <div class="memory-layout">
+            <div class="statement-card">
+              <p>
+                Hardvare stores board, device, build, validation, firmware, OTA, and debug history
+                so future support gets faster and more accurate.
+              </p>
+              <div class="future-inline">
+                <p class="section-kicker">From ESP to any board</p>
+                <p>
+                  Starting with ESP. Expanding to more boards. Adding multilingual support. Long
+                  term, anyone should be able to build any hardware.
+                </p>
+              </div>
             </div>
 
-            <div id="status" class="status-panel" aria-live="polite"></div>
+            <div class="memory-grid" aria-label="Tracked platform fields">
+              <article class="memory-card"><span>Device ID</span></article>
+              <article class="memory-card"><span>Board family</span></article>
+              <article class="memory-card"><span>Build intent</span></article>
+              <article class="memory-card"><span>Pin map</span></article>
+              <article class="memory-card"><span>Validation state</span></article>
+              <article class="memory-card"><span>I2C results</span></article>
+              <article class="memory-card"><span>Firmware history</span></article>
+              <article class="memory-card"><span>OTA status</span></article>
+              <article class="memory-card"><span>Final outcome</span></article>
+            </div>
+          </div>
+        </section>
+
+        <section class="section-block access-section" id="access-section">
+          <div class="section-heading access-heading">
+            <div>
+              <p class="section-kicker">Start here</p>
+              <h2>Start the build, not the setup.</h2>
+            </div>
+          </div>
+
+          <div class="hero-actions access-actions">
+            <a class="button button-primary" href="#access-section" data-start-build-link>
+              Start a build call
+            </a>
+            <a class="button button-secondary" href="#signup-form">
+              Create account
+            </a>
+            <a class="button button-secondary" href="#access-section">
+              Request board support
+            </a>
+          </div>
+
+          <div class="signed-in-banner hidden" id="signed-in-banner">
+            <div>
+              <p class="section-kicker">Signed in</p>
+              <h3>Go straight to your dashboard.</h3>
+              <p id="signed-in-copy">
+                Your account is active. Continue with a build call or review saved sessions below.
+              </p>
+            </div>
+            <a class="button button-primary" href="#dashboard-section" id="signed-in-dashboard-link">
+              Open dashboard
+            </a>
+          </div>
+
+          <section class="auth-card" id="login-section">
+            <div class="auth-copy">
+              <p class="auth-intro">
+                Create an account or sign in to start a build call.
+              </p>
+            </div>
+
+            <div class="auth-grid">
+              <section class="auth-panel">
+                <h3>Login</h3>
+
+                <form id="login-form" novalidate>
+                  <label for="username">Username</label>
+                  <input
+                    id="username"
+                    name="username"
+                    type="text"
+                    autocomplete="username"
+                    value="esphardvare"
+                    required
+                  >
+
+                  <label for="password">Password</label>
+                  <input
+                    id="password"
+                    name="password"
+                    type="password"
+                    autocomplete="current-password"
+                    placeholder="Enter your password"
+                    required
+                  >
+
+                  <button type="submit" id="login-button">Login</button>
+                </form>
+
+                <div class="help-text">
+                  Default admin account: <strong>esphardvare</strong> / <strong>espadmin</strong>.
+                </div>
+
+                <div id="login-status" class="status-panel" aria-live="polite"></div>
+              </section>
+
+              <section class="auth-panel">
+                <h3>Create account</h3>
+
+                <form id="signup-form" novalidate>
+                  <label for="signup-username">New username</label>
+                  <input
+                    id="signup-username"
+                    name="username"
+                    type="text"
+                    autocomplete="username"
+                    placeholder="yourname"
+                    required
+                  >
+
+                  <label for="signup-password">New password</label>
+                  <input
+                    id="signup-password"
+                    name="password"
+                    type="password"
+                    autocomplete="new-password"
+                    placeholder="Create a password"
+                    required
+                  >
+
+                  <label for="signup-confirm-password">Confirm password</label>
+                  <input
+                    id="signup-confirm-password"
+                    name="confirmPassword"
+                    type="password"
+                    autocomplete="new-password"
+                    placeholder="Type the same password again"
+                    required
+                  >
+
+                  <button type="submit" id="signup-button">Create account</button>
+                </form>
+
+                <div class="help-text">
+                  Usernames can use letters, numbers, dots, underscores, and hyphens.
+                </div>
+
+                <div id="signup-status" class="status-panel" aria-live="polite"></div>
+              </section>
+            </div>
           </section>
+        </section>
 
-          <section class="dashboard-panel">
-            <div class="panel-header">
-              <h3>Recent Sessions</h3>
-              <p>See the latest phone, build, and OTA activity.</p>
+        <section class="dashboard-card hidden section-block" id="dashboard-section">
+          <div class="dashboard-topbar">
+            <div>
+              <p class="section-kicker">Dashboard</p>
+              <h2>Welcome, <span id="auth-username">User</span></h2>
+              <p class="dashboard-copy" id="dashboard-copy">
+                Start outbound calls, monitor saved ESP sessions, and confirm the OTA page target.
+              </p>
             </div>
 
-            <div id="session-list" class="session-list"></div>
-          </section>
-        </div>
-      </section>
-    </main>
+            <div class="dashboard-actions">
+              <span class="role-badge" id="auth-role">user</span>
+              <button type="button" class="button button-secondary compact-button" id="logout-button">
+                Logout
+              </button>
+            </div>
+          </div>
 
-    <script src="/app.js" defer></script>
+          <div id="dashboard-metrics" class="metric-grid"></div>
+          <div id="service-status" class="service-grid"></div>
+
+          <div class="dashboard-layout">
+            <section class="dashboard-panel">
+              <div class="panel-split">
+                <div>
+                  <h3>Start call</h3>
+                  <p>Launch a phone call and bind it to a device ID.</p>
+                </div>
+                <span class="panel-chip">Voice execution</span>
+              </div>
+
+              <form id="call-form" novalidate>
+                <label for="phoneNumber">Phone number</label>
+                <input
+                  id="phoneNumber"
+                  name="phoneNumber"
+                  type="tel"
+                  inputmode="tel"
+                  placeholder="+91 98765 43210 or 98765-43210"
+                  required
+                >
+
+                <label for="pin">PIN</label>
+                <input
+                  id="pin"
+                  name="pin"
+                  type="password"
+                  inputmode="numeric"
+                  pattern="[0-9]*"
+                  maxlength="8"
+                  placeholder="4 to 8 digits"
+                  required
+                >
+
+                <label for="esp32Id">Device ID</label>
+                <input
+                  id="esp32Id"
+                  name="esp32Id"
+                  type="text"
+                  placeholder="pbl-129872L"
+                  value="pbl-129872L"
+                  required
+                >
+
+                <button type="submit" id="submit-button">Start call</button>
+              </form>
+
+              <div class="help-text">
+                Use any normalized phone number format. Hardvare keeps the voice session, build state,
+                validation state, and OTA history tied to the device.
+              </div>
+
+              <div id="status" class="status-panel" aria-live="polite"></div>
+            </section>
+
+            <section class="dashboard-panel">
+              <div class="panel-split">
+                <div>
+                  <h3>Recent sessions</h3>
+                  <p>Admins see every session. Standard users only see their own.</p>
+                </div>
+                <span class="panel-chip">Stored execution history</span>
+              </div>
+
+              <div id="session-list" class="session-list"></div>
+            </section>
+          </div>
+        </section>
+
+      </main>
+    </div>
+
+    <script src="/app.js?v=20260314-homepage" defer></script>
   </body>
 </html>

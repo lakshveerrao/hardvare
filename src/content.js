@@ -1,3 +1,5 @@
+const { config } = require("./config");
+
 const DEFAULT_ESP32_ID = "pbl-129872L";
 
 const BUILD_HINTS = [
@@ -9,6 +11,12 @@ const BUILD_HINTS = [
   "build a home automation relay"
 ].join(", ");
 
+function escapeArduinoString(value) {
+  return String(value || "")
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"');
+}
+
 const OTA_SCAFFOLD = `#include <WiFi.h>
 #include <WiFiClient.h>
 #include <WebServer.h>
@@ -16,8 +24,8 @@ const OTA_SCAFFOLD = `#include <WiFi.h>
 #include <Update.h>
 
 const char* host = "esp32";
-const char* ssid = "Laksh-2.4G";
-const char* password = "fundaz76";
+const char* ssid = "${escapeArduinoString(config.espWifiSsid)}";
+const char* password = "${escapeArduinoString(config.espWifiPassword)}";
 
 WebServer server(80);
 
@@ -30,78 +38,111 @@ String style =
 ".btn{background:#3498db;color:#fff;cursor:pointer}</style>";
 
 String loginIndex =
-"<form name=loginForm>"
+"<form name=loginForm onsubmit='return check(this)'>"
 "<h1>ESP32 Login</h1>"
 "<input name=userid placeholder='User ID'> "
 "<input name=pwd placeholder=Password type=Password> "
-"<input type=submit onclick=check(this.form) class=btn value=Login></form>"
+"<input type=submit class=btn value=Login></form>"
 "<script>"
 "function check(form) {"
 "if(form.userid.value=='admin' && form.pwd.value=='admin')"
-"{window.open('/serverIndex')}"
-"else"
-"{alert('Error Password or Username')}"
+"{window.location='/serverIndex';return false;}"
+"alert('Error Password or Username');"
+"return false;"
 "}"
 "</script>" + style;
 
 String serverIndex =
-"<script src='https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js'></script>"
-"<form method='POST' action='#' enctype='multipart/form-data' id='upload_form'>"
+"<form method='POST' action='/update' enctype='multipart/form-data' id='upload_form'>"
 "<input type='file' name='update' id='file' onchange='sub(this)' style=display:none>"
 "<label id='file-input' for='file'>   Choose file...</label>"
 "<input type='submit' class=btn value='Update'>"
 "<br><br>"
-"<div id='prg'></div>"
+"<div id='prg'>Choose the firmware file to start the OTA upload.</div>"
 "<br><div id='prgbar'><div id='bar'></div></div><br></form>"
 "<script>"
 "function sub(obj){"
-"var fileName = obj.value.split('\\\\');"
-"document.getElementById('file-input').innerHTML = '   '+ fileName[fileName.length-1];"
-"};"
-"$('form').submit(function(e){"
+"var fileName = obj.files && obj.files[0] ? obj.files[0].name : 'Choose file...';"
+"document.getElementById('file-input').innerHTML = '   ' + fileName;"
+"}"
+"document.getElementById('upload_form').addEventListener('submit', function(e){"
 "e.preventDefault();"
-"var form = $('#upload_form')[0];"
+"var form = document.getElementById('upload_form');"
+"var fileInput = document.getElementById('file');"
+"if(!fileInput.files || !fileInput.files.length){"
+"alert('Choose a firmware file first.');"
+"return;"
+"}"
 "var data = new FormData(form);"
-"$.ajax({"
-"url: '/update',"
-"type: 'POST',"
-"data: data,"
-"contentType: false,"
-"processData:false,"
-"xhr: function() {"
 "var xhr = new window.XMLHttpRequest();"
+"xhr.open('POST', '/update', true);"
 "xhr.upload.addEventListener('progress', function(evt) {"
 "if (evt.lengthComputable) {"
 "var per = evt.loaded / evt.total;"
-"$('#prg').html('progress: ' + Math.round(per*100) + '%');"
-"$('#bar').css('width',Math.round(per*100) + '%');"
+"document.getElementById('prg').innerHTML = 'progress: ' + Math.round(per*100) + '%';"
+"document.getElementById('bar').style.width = Math.round(per*100) + '%';"
 "}"
 "}, false);"
-"return xhr;"
-"},"
-"success:function(d, s) {"
-"console.log('success!') "
-"},"
-"error: function (a, b, c) {"
-"}"
-"});"
+"xhr.onload = function(){"
+"document.getElementById('prg').innerHTML = xhr.responseText || 'Upload complete';"
+"};"
+"xhr.onerror = function(){"
+"document.getElementById('prg').innerHTML = 'Upload failed';"
+"};"
+"xhr.send(data);"
 "});"
 "</script>" + style;
 
+bool mdnsStarted = false;
+unsigned long lastWifiAttemptAt = 0;
+unsigned long lastWifiReportAt = 0;
+const unsigned long wifiRetryIntervalMs = 15000;
+const unsigned long wifiConnectWindowMs = 20000;
+const unsigned long wifiReportIntervalMs = 15000;
+
+void tryStartMdns() {
+  if (!mdnsStarted && WiFi.status() == WL_CONNECTED) {
+    mdnsStarted = MDNS.begin(host);
+  }
+}
+
+void maintainWifiConnection() {
+  if (WiFi.status() == WL_CONNECTED) {
+    tryStartMdns();
+    return;
+  }
+
+  unsigned long now = millis();
+
+  if (lastWifiAttemptAt == 0 || now - lastWifiAttemptAt >= wifiRetryIntervalMs) {
+    lastWifiAttemptAt = now;
+    WiFi.disconnect();
+    WiFi.begin(ssid, password);
+  }
+}
+
+void reportWifiStatusToSerial() {
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("HARDVARE_IP=" + WiFi.localIP().toString());
+  } else {
+    Serial.println("HARDVARE_IP=offline");
+  }
+}
+
 void setup(void) {
   Serial.begin(115200);
-  WiFi.begin(ssid, password);
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  maintainWifiConnection();
 
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
+  unsigned long connectDeadline = millis() + wifiConnectWindowMs;
+  while (WiFi.status() != WL_CONNECTED && millis() < connectDeadline) {
+    delay(250);
     Serial.print(".");
   }
 
-  if (!MDNS.begin(host)) {
-    while (1) {
-      delay(1000);
-    }
-  }
+  tryStartMdns();
+  reportWifiStatusToSerial();
 
   server.on("/", HTTP_GET, []() {
     server.sendHeader("Connection", "close");
@@ -138,11 +179,16 @@ void setup(void) {
 }
 
 void loop(void) {
+  maintainWifiConnection();
+  if (millis() - lastWifiReportAt >= wifiReportIntervalMs) {
+    lastWifiReportAt = millis();
+    reportWifiStatusToSerial();
+  }
   server.handleClient();
   delay(1);
 }`;
 
-const BUILDER_SYSTEM_PROMPT = `You are Hardware Builder, an expert ESP32 wiring and firmware assistant.
+const BUILDER_SYSTEM_PROMPT = `You are Hardware Builder, an expert ESP32 wiring and firmware assistant. Safety first is the highest priority.
 
 You will receive:
 - an ESP32 device ID
@@ -156,14 +202,20 @@ Your job:
 
 Rules:
 - Return JSON only. Do not wrap it in markdown.
+- Put safety first before convenience or feature count.
 - Keep spoken instructions short and clear.
 - Each wiring step must describe exactly one connection.
 - Use real ESP32 GPIO labels.
 - Do not invent dangerous mains-voltage wiring.
+- Avoid risky power advice. Prefer low-voltage, current-limited, and clearly grounded wiring.
 - Make reasonable assumptions if parts are missing.
 - Mention assumptions in spokenIntro.
 - Preserve OTA functionality and the OTA login flow from the scaffold.
 - Keep the generated sketch in Arduino C++ for ESP32.
+- For servo projects on ESP32, use ESP32Servo, not Servo.h.
+- For DHT11 or DHT22 projects, use the common DHT sensor library with DHT.h.
+- Do not add manual forward declarations for ledcWrite or other ESP32 core functions.
+- If the caller says an unknown sensor name that sounds like DHT, choose DHT11 or DHT22 and say that assumption in spokenIntro.
 
 JSON shape:
 {
